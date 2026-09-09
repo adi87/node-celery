@@ -5,13 +5,15 @@ var url = require('url'),
     events = require('events'),
     uuid = require('uuid');
 
+var redisCompat = require('./redis-compat');
+
 var createMessage = require('./protocol').createMessage;
 
 var debug = process.env.NODE_CELERY_DEBUG === '1' ? console.info : function() {};
 
 var supportedProtocols = ['amqp', 'amqps', 'redis'];
 function getProtocol(kind, options) {
-    const protocol = url.parse(options.url).protocol.slice(0, -1);
+    var protocol = url.parse(options.url).protocol.slice(0, -1);
     if (protocol === 'amqps') {
         protocol = 'amqp';
     }
@@ -71,11 +73,12 @@ function RedisBroker(conf) {
     var self = this;
 
     if (conf.BROKER_OPTIONS.createClient) {
-        self.redis = conf.BROKER_OPTIONS.createClient('broker');
+        self.redis = redisCompat.wrap(conf.BROKER_OPTIONS.createClient('broker'));
 
+        // Someone else owns this client, so leave closing it to them.
         self.disconnect = function () {};
     } else {
-        self.redis = redis.createClient(conf.BROKER_OPTIONS);
+        self.redis = redisCompat.wrap(redis.createClient(conf.BROKER_OPTIONS));
 
         self.disconnect = function() {
             self.redis.quit();
@@ -94,9 +97,11 @@ function RedisBroker(conf) {
         self.emit('end');
     });
 
+    self.redis.connect();
+
     self.publish = function(queue, message, options, callback, id) {
         var payload = {
-            body: new Buffer(message).toString('base64'),
+            body: Buffer.from(message).toString('base64'),
             headers: {},
             'content-type': options.contentType,
             'content-encoding': options.contentEncoding,
@@ -124,12 +129,13 @@ function RedisBackend(conf) {
     var self = this;
 
     if (conf.RESULT_BACKEND_OPTIONS.createClient) {
-        self.redis = conf.RESULT_BACKEND_OPTIONS.createClient('backend');
-        self.redis_ex = conf.RESULT_BACKEND_OPTIONS.createClient('backend_ex');
+        self.redis = redisCompat.wrap(conf.RESULT_BACKEND_OPTIONS.createClient('backend'));
+        self.redis_ex = redisCompat.wrap(conf.RESULT_BACKEND_OPTIONS.createClient('backend_ex'));
 
+        // Someone else owns these clients, so leave closing them to them.
         self.disconnect = function () {};
     } else {
-        self.redis = redis.createClient(conf.RESULT_BACKEND_OPTIONS);
+        self.redis = redisCompat.wrap(redis.createClient(conf.RESULT_BACKEND_OPTIONS));
         self.redis_ex = self.redis.duplicate();
 
         self.disconnect = function() {
@@ -143,6 +149,11 @@ function RedisBackend(conf) {
             self.emit('error', err);
         });
     }
+
+    // No-ops on redis@2/@3, which connect themselves. redis_ex is connected up
+    // front so it is ready to serve get()/expire() as soon as results arrive.
+    self.redis_ex.connect();
+    self.redis.connect();
 
     // store results to emit event when ready
     self.results = {};
@@ -239,8 +250,16 @@ Client.prototype.createTask = function(name, options, exchange) {
 };
 
 Client.prototype.end = function() {
-    this.broker.disconnect();
-    this.backend.disconnect();
+    // The broker is only created once the backend reports ready, so a client
+    // that never finished connecting has no broker to close. Without these
+    // guards end() throws "Cannot read properties of undefined" and masks the
+    // original connection error.
+    if (this.broker && this.broker.disconnect) {
+        this.broker.disconnect();
+    }
+    if (this.backend && this.backend.disconnect) {
+        this.backend.disconnect();
+    }
 };
 
 Client.prototype.call = function(name /*[args], [kwargs], [options], [callback]*/ ) {

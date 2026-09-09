@@ -1,6 +1,6 @@
 {
   "name": "node-celery",
-  "version": "0.2.8",
+  "version": "0.3.0",
   "description": "Celery client for Node",
   "author": "Mher Movsisyan <mher.movsisyan@gmail.com>",
   "scripts": {
@@ -8,7 +8,7 @@
   },
   "dependencies": {
     "amqp": "*",
-    "redis": "*",
+    "redis": "^2.8.0 || ^3 || ^4 || ^5",
     "uuid": "^3.0.0"
   },
   "repository": {

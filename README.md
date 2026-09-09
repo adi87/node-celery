@@ -106,6 +106,26 @@ client.on('connect', function() {
 
 The backend is used to store task results. Currently AMQP (RabbitMQ) and Redis backends are supported.
 
+#### Redis client versions
+
+Any of `redis@2`, `redis@3`, `redis@4` or `redis@5` works. The differences
+between the callback-era clients (2.x/3.x) and the promise-era rewrite (4.x/5.x)
+are handled in `redis-compat.js`:
+
+* 4.x/5.x return a *disconnected* client that has to be `connect()`ed, whereas
+  2.x/3.x connect themselves;
+* commands are camelCase and promise-based in 4.x/5.x (`lPush`, `pSubscribe`)
+  versus lower-case and callback-based in 2.x/3.x (`lpush`, `psubscribe`);
+* pattern messages arrive through a listener passed to `pSubscribe` in 4.x/5.x
+  instead of a `pmessage` event.
+
+Note the dependency is declared as a range rather than `*`. With `*`, npm
+installs whatever the current major is, which is how projects ended up on a
+client the library could not drive.
+
+The broker and the result backend may point at different Redis databases — they
+get separate connections.
+
 ```javascript
 var celery = require('node-celery'),
 	client = celery.createClient({
