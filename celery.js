@@ -6,6 +6,7 @@ var url = require('url'),
     uuid = require('uuid');
 
 var redisCompat = require('./redis-compat');
+var compression = require('./compression');
 
 var createMessage = require('./protocol').createMessage;
 
@@ -72,6 +73,10 @@ function Configuration(options) {
 function RedisBroker(conf) {
     var self = this;
 
+    // Validated once here rather than per publish, so a bad value surfaces
+    // when the client is created instead of on the first task.
+    var compressionContentType = compression.contentTypeFor(conf.MESSAGE_COMPRESSION);
+
     if (conf.BROKER_OPTIONS.createClient) {
         self.redis = redisCompat.wrap(conf.BROKER_OPTIONS.createClient('broker'));
 
@@ -100,9 +105,19 @@ function RedisBroker(conf) {
     self.redis.connect();
 
     self.publish = function(queue, message, options, callback, id) {
+        // Off unless CELERY_MESSAGE_COMPRESSION is set. kombu reads
+        // headers.compression to decide whether to decompress, so the header
+        // and the body have to be set together.
+        var body = message;
+        var headers = {};
+        if (compressionContentType) {
+            body = compression.compress(message, compressionContentType);
+            headers.compression = compressionContentType;
+        }
+
         var payload = {
-            body: Buffer.from(message).toString('base64'),
-            headers: {},
+            body: Buffer.from(body).toString('base64'),
+            headers: headers,
             'content-type': options.contentType,
             'content-encoding': options.contentEncoding,
             properties: {
